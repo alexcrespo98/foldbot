@@ -11,7 +11,7 @@ PIN_VACUUM = 13
 class VacuumController(Node):
     def __init__(self):
         super().__init__('vacuum_controller')
-        self.board = Arduino('/dev/ttyACM0')
+        self.board = Arduino('/dev/arduino_rx')
         self.vacuum_pin = self.board.digital[PIN_VACUUM]
         self.vacuum_pin.mode = 1  # OUTPUT
         self.sub = self.create_subscription(
