@@ -11,7 +11,7 @@ PIN_LEFT_LIMIT = 9
 class LeftLimitSwitch(Node):
     def __init__(self):
         super().__init__('left_limit_switch')
-        self.board = Arduino('/dev/ttyACM0')
+        self.board = Arduino('/dev/arduino_tx')
         self.limit_pin = self.board.digital[PIN_LEFT_LIMIT]
         self.limit_pin.mode = 0  # INPUT
         self.pub = self.create_publisher(Bool, 'left_limit_state', 10)
