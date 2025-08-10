@@ -11,7 +11,7 @@ PIN_RIGHT_LIMIT = 10
 class RightLimitSwitch(Node):
     def __init__(self):
         super().__init__('right_limit_switch')
-        self.board = Arduino('/dev/ttyACM0')
+        self.board = Arduino('/arduino_rx')
         self.limit_pin = self.board.digital[PIN_RIGHT_LIMIT]
         self.limit_pin.mode = 0  # INPUT
         self.pub = self.create_publisher(Bool, 'right_limit_state', 10)
