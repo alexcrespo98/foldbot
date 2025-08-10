@@ -19,9 +19,9 @@ class MainController(Node):
         self.at_right_limit = False
 
         # Subscribers
-        self.create_subscription(Bool, 'napkin_present', self.napkin_callback, 10)
-        self.create_subscription(Bool, 'left_limit_switch', self.left_limit_callback, 10)
-        self.create_subscription(Bool, 'right_limit_switch', self.right_limit_callback, 10)
+        self.create_subscription(Bool, 'napkin_detected', self.napkin_callback, 10)
+        self.create_subscription(Bool, 'left_limit_state', self.left_limit_callback, 10)
+        self.create_subscription(Bool, 'right_limit_state', self.right_limit_callback, 10)
 
         # Allow time for all nodes to connect
         self.get_logger().info("Waiting for other nodes to initialize...")

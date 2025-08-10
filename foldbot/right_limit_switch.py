@@ -1,28 +1,51 @@
 # right_limit_switch.py
-# Publishes state of right (max X) limit switch
+# Publishes state of right (max X) limit switch via Arduino communication topics
 
 import rclpy
 from rclpy.node import Node
-from std_msgs.msg import Bool
-from pyfirmata import Arduino, util
+from std_msgs.msg import Bool, String
+import json
 
 PIN_RIGHT_LIMIT = 10
 
 class RightLimitSwitch(Node):
     def __init__(self):
         super().__init__('right_limit_switch')
-        self.board = Arduino('/dev/ttyACM0')
-        self.limit_pin = self.board.digital[PIN_RIGHT_LIMIT]
-        self.limit_pin.mode = 0  # INPUT
+        
+        # Subscribe to Arduino responses
+        self.arduino_rx_sub = self.create_subscription(
+            String, '/arduino_rx', self.arduino_rx_callback, 10)
+        
+        # Publish limit switch state
         self.pub = self.create_publisher(Bool, 'right_limit_state', 10)
-        self.timer = self.create_timer(0.05, self.read_switch)
+        
+        # Request periodic readings from Arduino
+        self.arduino_tx_pub = self.create_publisher(String, '/arduino_tx', 10)
+        self.timer = self.create_timer(0.05, self.request_reading)
 
-    def read_switch(self):
-        state = bool(self.limit_pin.read())
-        msg = Bool()
-        msg.data = state
-        self.pub.publish(msg)
-        self.get_logger().debug(f'Right limit: {state}')
+    def request_reading(self):
+        # Request digital read from Arduino
+        command = {
+            "command": "digital_read",
+            "pin": PIN_RIGHT_LIMIT
+        }
+        msg = String()
+        msg.data = json.dumps(command)
+        self.arduino_tx_pub.publish(msg)
+
+    def arduino_rx_callback(self, msg):
+        try:
+            data = json.loads(msg.data)
+            if (data.get("type") == "digital_read" and 
+                data.get("pin") == PIN_RIGHT_LIMIT):
+                
+                state = bool(data.get("value", False))
+                msg_out = Bool()
+                msg_out.data = state
+                self.pub.publish(msg_out)
+                self.get_logger().debug(f'Right limit: {state}')
+        except (json.JSONDecodeError, KeyError) as e:
+            self.get_logger().debug(f'Invalid Arduino response: {e}')
 
 def main(args=None):
     rclpy.init(args=args)

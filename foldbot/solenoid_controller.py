@@ -1,24 +1,35 @@
 # solenoid_controller.py
-# Controls the solenoid actuator
+# Controls the solenoid actuator via Arduino communication topics
 
 import rclpy
 from rclpy.node import Node
-from std_msgs.msg import Bool
-from pyfirmata import Arduino, util
+from std_msgs.msg import Bool, String
+import json
 
 PIN_SOLENOID = 12
 
 class SolenoidController(Node):
     def __init__(self):
         super().__init__('solenoid_controller')
-        self.board = Arduino('/dev/ttyACM0')
-        self.solenoid_pin = self.board.digital[PIN_SOLENOID]
-        self.solenoid_pin.mode = 1  # OUTPUT
+        
+        # Arduino communication publisher
+        self.arduino_tx_pub = self.create_publisher(String, '/arduino_tx', 10)
+        
+        # Listen for solenoid commands
         self.sub = self.create_subscription(
             Bool, 'solenoid_cmd', self.solenoid_callback, 10)
 
     def solenoid_callback(self, msg):
-        self.solenoid_pin.write(1 if msg.data else 0)
+        # Send digital write command to Arduino
+        command = {
+            "command": "digital_write",
+            "pin": PIN_SOLENOID,
+            "value": 1 if msg.data else 0
+        }
+        msg_arduino = String()
+        msg_arduino.data = json.dumps(command)
+        self.arduino_tx_pub.publish(msg_arduino)
+        
         self.get_logger().info(f'Solenoid {"ON" if msg.data else "OFF"}')
 
 def main(args=None):
