@@ -1,25 +1,22 @@
-# solenoid_controller.py
-# Controls the solenoid actuator
-
 import rclpy
 from rclpy.node import Node
-from std_msgs.msg import Bool
-from pyfirmata import Arduino, util
-
-PIN_SOLENOID = 12
+from std_msgs.msg import String
 
 class SolenoidController(Node):
     def __init__(self):
         super().__init__('solenoid_controller')
-        self.board = Arduino('/arduino_rx')
-        self.solenoid_pin = self.board.digital[PIN_SOLENOID]
-        self.solenoid_pin.mode = 1  # OUTPUT
-        self.sub = self.create_subscription(
-            Bool, 'solenoid_cmd', self.solenoid_callback, 10)
+        self.tx_pub = self.create_publisher(String, 'arduino_tx', 10)
+        self.rx_sub = self.create_subscription(String, 'arduino_rx', self.arduino_rx_callback, 10)
+        self.activate_solenoid(True)
 
-    def solenoid_callback(self, msg):
-        self.solenoid_pin.write(1 if msg.data else 0)
-        self.get_logger().info(f'Solenoid {"ON" if msg.data else "OFF"}')
+    def activate_solenoid(self, activate: bool):
+        msg = String()
+        msg.data = f"SOLENOID:{'ON' if activate else 'OFF'}"
+        self.tx_pub.publish(msg)
+        self.get_logger().info(f"Sent: SOLENOID:{'ON' if activate else 'OFF'}")
+
+    def arduino_rx_callback(self, msg):
+        self.get_logger().info(f"Arduino says: {msg.data}")
 
 def main(args=None):
     rclpy.init(args=args)
