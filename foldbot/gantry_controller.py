@@ -21,7 +21,7 @@ PIN_ENABLE = 8
 class GantryController(Node):
     def __init__(self):
         super().__init__('gantry_controller')
-        self.board = Arduino('/dev/ttyACM0')   # Change if your board is at a different port!
+        self.board = Arduino('/dev/arduino_tx')   
         # X axis setup
         self.x_step_pin = self.board.digital[PIN_X_STEP]
         self.x_dir_pin  = self.board.digital[PIN_X_DIR]
