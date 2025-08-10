@@ -1,26 +1,22 @@
-# servo_controller.py
-# Controls a servo for folding arm
-
 import rclpy
 from rclpy.node import Node
-from std_msgs.msg import Int32
-from pyfirmata import Arduino, util
-
-PIN_SERVO = 11
+from std_msgs.msg import String
 
 class ServoController(Node):
     def __init__(self):
         super().__init__('servo_controller')
-        self.board = Arduino('/arduino_rx')
-        self.servo_pin = self.board.digital[PIN_SERVO]
-        self.servo_pin.mode = 4  # SERVO
-        self.sub = self.create_subscription(
-            Int32, 'servo_angle', self.set_angle_callback, 10)
+        self.tx_pub = self.create_publisher(String, 'arduino_tx', 10)
+        self.rx_sub = self.create_subscription(String, 'arduino_rx', self.arduino_rx_callback, 10)
+        self.set_servo_position(90)
 
-    def set_angle_callback(self, msg):
-        angle = max(0, min(180, msg.data))
-        self.servo_pin.write(angle)
-        self.get_logger().info(f'Servo set to angle: {angle}')
+    def set_servo_position(self, position):
+        msg = String()
+        msg.data = f"SERVO:{position}"
+        self.tx_pub.publish(msg)
+        self.get_logger().info(f"Sent: SERVO:{position}")
+
+    def arduino_rx_callback(self, msg):
+        self.get_logger().info(f"Arduino says: {msg.data}")
 
 def main(args=None):
     rclpy.init(args=args)
