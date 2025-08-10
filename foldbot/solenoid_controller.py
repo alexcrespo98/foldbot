@@ -11,7 +11,7 @@ PIN_SOLENOID = 12
 class SolenoidController(Node):
     def __init__(self):
         super().__init__('solenoid_controller')
-        self.board = Arduino('/dev/ttyACM0')
+        self.board = Arduino('/arduino_rx')
         self.solenoid_pin = self.board.digital[PIN_SOLENOID]
         self.solenoid_pin.mode = 1  # OUTPUT
         self.sub = self.create_subscription(
