@@ -22,6 +22,8 @@ class MainController(Node):
         self.servo1_pub = self.create_publisher(String, 'servo_cmd', 10)
         self.servo2_pub = self.create_publisher(String, 'solenoid_cmd', 10)
         self.vacuum_pub = self.create_publisher(Bool, 'vacuum_cmd', 10)
+        self.arduino_tx_pub = self.create_publisher(String, 'arduino_tx', 10)  # NEW
+
         self.arduino_connected = False
 
         self.napkin_present = None
@@ -32,6 +34,9 @@ class MainController(Node):
         self.create_subscription(Bool, 'left_limit_switch', self.left_limit_callback, 10)
         self.create_subscription(Bool, 'right_limit_switch', self.right_limit_callback, 10)
         self.create_subscription(String, 'arduino_rx', self.arduino_rx_callback, 10)
+
+        # Poll Arduino for sensors every 100ms
+        self.create_timer(0.1, self.poll_arduino_sensors)  # NEW
 
         self.get_logger().info("Waiting for Arduino to connect...")
 
@@ -44,6 +49,12 @@ class MainController(Node):
         time.sleep(1)
         self.get_logger().info("Starting sequence!")
         self.run_sequence()
+
+    def poll_arduino_sensors(self):
+        # Query all sensors every 100ms
+        self.arduino_tx_pub.publish(String(data="LEFT_LIMIT_SWITCH:QUERY"))
+        self.arduino_tx_pub.publish(String(data="RIGHT_LIMIT_SWITCH:QUERY"))
+        self.arduino_tx_pub.publish(String(data="NAPKIN_SENSOR:QUERY"))
 
     def arduino_rx_callback(self, msg):
         if "ARDUINO_READY" in msg.data:
