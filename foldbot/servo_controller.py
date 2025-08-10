@@ -11,7 +11,7 @@ PIN_SERVO = 11
 class ServoController(Node):
     def __init__(self):
         super().__init__('servo_controller')
-        self.board = Arduino('/dev/ttyACM0')
+        self.board = Arduino('/arduino_rx')
         self.servo_pin = self.board.digital[PIN_SERVO]
         self.servo_pin.mode = 4  # SERVO
         self.sub = self.create_subscription(
