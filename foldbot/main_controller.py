@@ -1,181 +1,187 @@
 import rclpy
 from rclpy.node import Node
-from std_msgs.msg import String, Bool
-
+from std_msgs.msg import String
 import time
-
-SERVO_ANGLE = 180        # Main folding servo angle (degrees)
-SERVO_HOME = 0
-SOLENOID_ANGLE = 90       # "Solenoid" servo angle (degrees, dummy value)
-SOLENOID_HOME = 0
-Z_DOWN_POS = 100         # Example Z-down position; adjust as needed
-Z_UP_POS = 0             # Example Z-up position; adjust as needed
-
-MOVE_STEP_TIME = 0.1     # Time to wait between move commands (seconds)
-LIMIT_TIMEOUT = 10       # Limit switch wait timeout (seconds)
 
 class MainController(Node):
     def __init__(self):
         super().__init__('main_controller')
-        self.gantry_pub = self.create_publisher(String, 'gantry_cmd', 10)
-        self.servo_pub = self.create_publisher(String, 'servo_cmd', 10)
-        self.solenoid_pub = self.create_publisher(String, 'solenoid_cmd', 10)
-        self.vacuum_pub = self.create_publisher(Bool, 'vacuum_cmd', 10)
         self.arduino_tx_pub = self.create_publisher(String, 'arduino_tx', 10)
+        self.arduino_rx_sub = self.create_subscription(String, 'arduino_rx', self.arduino_rx_callback, 10)
+        self.sensor_states = {
+            "LEFT_LIMIT_SWITCH": None,
+            "RIGHT_LIMIT_SWITCH": None,
+            "NAPKIN_SENSOR": None
+        }
+        self.last_arduino_msg = ""
+        self.waiting_for = None
 
-        self.napkin_present = False
-        self.at_left_limit = False
-        self.at_right_limit = False
-        self.z_at_bottom = False
-        self.z_at_top = True
+        # ------ Sequence parameters ------
+        self.steps_per_revolution = 200
+        self.z_rotations = 7.5
+        self.z_steps = int(self.z_rotations * self.steps_per_revolution)
+        self.x_step_size =25  # how many steps to move per X axis poll
+        self.z_step_size = self.z_steps  # full up/down movement
+        self.servo1_angle = 45
+        self.servo2_angle = 170
+        # ---------------------------------
 
-        # Subscriptions
-        self.create_subscription(Bool, '/napkin_sensor', self.napkin_callback, 10)
-        self.create_subscription(Bool, '/left_limit_switch', self.left_limit_callback, 10)
-        self.create_subscription(Bool, '/right_limit_switch', self.right_limit_callback, 10)
+        # Start polling sensors
+        self.sensor_timer = self.create_timer(0.1, self.poll_sensors)
 
-        # Poll Arduino for sensors every 100ms
-        self.create_timer(0.1, self.poll_arduino_sensors)
+        self.get_logger().info("Waiting for Arduino handshake...")
+        self.wait_for_arduino_handshake()
+        self.get_logger().info("Arduino connected! Starting sequence in 2s...")
+        time.sleep(2)
+        self.run_sequence()
 
-        self.get_logger().info("Starting main controller sequence!")
-        time.sleep(1)
-        self.run_cycle()
-
-    def poll_arduino_sensors(self):
-        # Query all sensors every 100ms
+    def poll_sensors(self):
+        # Query all sensors, 10Hz
         self.arduino_tx_pub.publish(String(data="LEFT_LIMIT_SWITCH:QUERY"))
         self.arduino_tx_pub.publish(String(data="RIGHT_LIMIT_SWITCH:QUERY"))
         self.arduino_tx_pub.publish(String(data="NAPKIN_SENSOR:QUERY"))
 
-    def napkin_callback(self, msg):
-        self.napkin_present = msg.data
+    def arduino_rx_callback(self, msg):
+        self.last_arduino_msg = msg.data
+        # Parse sensor responses
+        for key in self.sensor_states.keys():
+            if msg.data.startswith(f"{key}:"):
+                value = msg.data.split(":")[1].strip()
+                self.sensor_states[key] = value
+        # Used for waiting for specific replies
+        if self.waiting_for and self.waiting_for in msg.data:
+            self.waiting_for = None
 
-    def left_limit_callback(self, msg):
-        self.at_left_limit = msg.data
-
-    def right_limit_callback(self, msg):
-        self.at_right_limit = msg.data
-
-    def wait_for_switch(self, attr, timeout=LIMIT_TIMEOUT):
-        """Wait for a boolean attribute to become True with timeout."""
-        end = time.time() + timeout
-        while time.time() < end:
-            if getattr(self, attr):
-                return True
+    def wait_for_arduino_reply(self, expected, timeout=10.0):
+        """ Wait for an exact reply from Arduino (actions only, not sensors) """
+        self.waiting_for = expected
+        start = time.time()
+        while rclpy.ok() and self.waiting_for:
             rclpy.spin_once(self, timeout_sec=0.05)
-            time.sleep(0.05)
-        return getattr(self, attr)
+            if time.time() - start > timeout:
+                self.get_logger().error(f"Timeout waiting for Arduino reply: {expected}")
+                self.waiting_for = None
+                return False
+        return True
 
-    def move_x_left_until_switch(self):
-        self.get_logger().info("Moving X axis left until left limit switch is hit...")
-        while not self.at_left_limit and rclpy.ok():
-            self.gantry_pub.publish(String(data="MOVE_X_LEFT"))
-            rclpy.spin_once(self, timeout_sec=0.05)
-            time.sleep(MOVE_STEP_TIME)
-        self.gantry_pub.publish(String(data="STOP_X"))
-        self.get_logger().info("Left limit switch hit.")
-
-    def move_x_right_until_switch(self):
-        self.get_logger().info("Moving X axis right until right limit switch is hit...")
-        while not self.at_right_limit and rclpy.ok():
-            self.gantry_pub.publish(String(data="MOVE_X_RIGHT"))
-            rclpy.spin_once(self, timeout_sec=0.05)
-            time.sleep(MOVE_STEP_TIME)
-        self.gantry_pub.publish(String(data="STOP_X"))
-        self.get_logger().info("Right limit switch hit.")
-
-    def move_z_to(self, pos):
-        self.get_logger().info(f"Moving Z axis to position {pos}...")
-        self.gantry_pub.publish(String(data=f"MOVE_Z_ABS:{pos}"))
-        # For simplicity, wait a fixed time; replace with Z position feedback if available
-        time.sleep(2)  # Adjust as needed
-
-    def vacuum_on(self):
-        self.vacuum_pub.publish(Bool(data=True))
-        self.get_logger().info("Vacuum turned ON")
-        time.sleep(0.5)
-
-    def vacuum_off(self):
-        self.vacuum_pub.publish(Bool(data=False))
-        self.get_logger().info("Vacuum turned OFF")
-        time.sleep(0.5)
-
-    def activate_solenoid(self, active=True):
-        angle = SOLENOID_ANGLE if active else SOLENOID_HOME
-        self.solenoid_pub.publish(String(data=str(angle)))
-        self.get_logger().info(f"Solenoid {'activated' if active else 'deactivated'} ({angle})")
-
-    def activate_servo(self, active=True):
-        angle = SERVO_ANGLE if active else SERVO_HOME
-        self.servo_pub.publish(String(data=str(angle)))
-        self.get_logger().info(f"Servo {'activated' if active else 'deactivated'} ({angle})")
-
-    def run_cycle(self):
+    def wait_for_sensor_state(self, sensor, desired_state="ON", timeout=10.0):
+        """ Wait for sensor to reach a state (e.g. LEFT_LIMIT_SWITCH:ON) """
+        start = time.time()
         while rclpy.ok():
-            # 1. Wait for left limit switch, or move X left until found
-            self.get_logger().info("Waiting for left limit switch...")
-            got_left = self.wait_for_switch("at_left_limit", timeout=LIMIT_TIMEOUT)
-            if not got_left:
-                self.get_logger().info("Left limit not detected, homing X left...")
-                self.move_x_left_until_switch()
-            else:
-                self.get_logger().info("Left limit switch detected.")
+            rclpy.spin_once(self, timeout_sec=0.05)
+            state = self.sensor_states.get(sensor)
+            if state == desired_state:
+                return True
+            if time.time() - start > timeout:
+                self.get_logger().error(f"Timeout waiting for {sensor} to be {desired_state}")
+                return False
+            time.sleep(0.05)
+        return False
 
-            # 2. Drop Z axis
-            self.move_z_to(Z_DOWN_POS)
+    def wait_for_arduino_handshake(self, timeout=15.0):
+        """ Robust handshake: waits for repeated ARDUINO_READY, sends HELLO_ARDUINO, waits for ARDUINO_ACK """
+        start = time.time()
+        ready_confirmed = False
+        while rclpy.ok():
+            rclpy.spin_once(self, timeout_sec=0.05)
+            if "ARDUINO_READY" in self.last_arduino_msg:
+                self.get_logger().info("Arduino says ready, sending HELLO_ARDUINO")
+                self.arduino_tx_pub.publish(String(data="HELLO_ARDUINO"))
+                ready_confirmed = True
+            if ready_confirmed and "ARDUINO_ACK" in self.last_arduino_msg:
+                self.get_logger().info("Received ARDUINO_ACK!")
+                return True
+            if time.time() - start > timeout:
+                self.get_logger().error("Timeout waiting for ARDUINO_READY handshake")
+                return False
+            time.sleep(0.05)
+        return False
 
-            # 3. Turn vacuum on
-            self.vacuum_on()
+    def move_x_until_limit(self, direction, limit_sensor, timeout=30.0):  # Increased timeout for X axis
+        """Move X direction (0=left, 1=right) until a limit switch is ON."""
+        self.get_logger().info(f"Moving X {'RIGHT' if direction else 'LEFT'} until {limit_sensor} is ON...")
+        # Move in small steps, poll sensor after each
+        start = time.time()
+        while rclpy.ok():
+            if self.sensor_states.get(limit_sensor) == "ON":
+                self.get_logger().info(f"{limit_sensor} triggered!")
+                break
+            # Move a small step
+            self.arduino_tx_pub.publish(String(data=f"X_MOVE:{direction}:{self.x_step_size}"))
+            self.wait_for_arduino_reply("X_MOVE:DONE")
+            # Allow polling to catch up
+            rclpy.spin_once(self, timeout_sec=0.02)
+            if time.time() - start > timeout:
+                self.get_logger().error(f"Timeout moving X towards {limit_sensor}")
+                break
+            time.sleep(0.03)
 
-            # 4. Raise Z axis
-            self.move_z_to(Z_UP_POS)
+    def move_z(self, direction, steps):
+        """Move Z direction (0=down, 1=up) by steps."""
+        self.get_logger().info(f"Moving Z {'UP' if direction else 'DOWN'} {steps} steps...")
+        self.arduino_tx_pub.publish(String(data=f"Z_MOVE:{direction}:{steps}"))
+        self.wait_for_arduino_reply("Z_MOVE:DONE")
 
-            # 5. Move to right limit switch
-            self.move_x_right_until_switch()
+    def run_sequence(self):
+        # Step 1: Home X axis left
+        self.move_x_until_limit(direction=0, limit_sensor="LEFT_LIMIT_SWITCH")
+        time.sleep(0.25)
 
-            # 6. Drop Z axis
-            self.move_z_to(Z_DOWN_POS)
+        # Step 2: Start vacuum (NO napkin sensor check here)
+        self.get_logger().info("Turning vacuum ON...")
+        self.arduino_tx_pub.publish(String(data="VACUUM:ON"))
+        self.wait_for_arduino_reply("VACUUM:ON")
+        time.sleep(5.0)
 
-            # 7. Turn vacuum off
-            self.vacuum_off()
+        # Step 3: Move Z up
+        self.move_z(direction=1, steps=self.z_step_size)
+        time.sleep(0.2)
 
-            # 8. Raise Z axis
-            self.move_z_to(Z_UP_POS)
+        # Step 4: Move X right until right endstop
+        self.move_x_until_limit(direction=1, limit_sensor="RIGHT_LIMIT_SWITCH")
+        time.sleep(0.2)
 
-            # 9. Move back to left limit switch
-            self.move_x_left_until_switch()
+        # Step 5: Release vacuum
+        self.get_logger().info("Turning vacuum OFF...")
+        self.arduino_tx_pub.publish(String(data="VACUUM:OFF"))
+        self.wait_for_arduino_reply("VACUUM:OFF", timeout=1.0)
+        self.get_logger().info("Resting for 5 seconds after vacuum off...")
+        time.sleep(5.0)
 
-            # 10. Activate napkin detector
-            self.get_logger().info("Checking for napkin...")
-            time.sleep(1)
-            self.poll_arduino_sensors()
-            napkin_found = False
-            napkin_wait_start = time.time()
-            while time.time() - napkin_wait_start < 2:
-                rclpy.spin_once(self, timeout_sec=0.1)
-                if self.napkin_present:
-                    napkin_found = True
-                    break
+        # Step 6: Move X left to left endstop
+        self.move_x_until_limit(direction=0, limit_sensor="LEFT_LIMIT_SWITCH")
+        time.sleep(0.2)
 
-            if not napkin_found:
-                self.get_logger().info("Napkin not detected. Repeating cycle.")
-                continue
+        # Step 7: Move Z down
+        self.move_z(direction=0, steps=self.z_step_size)
+        time.sleep(0.2)
 
-            # 11. Napkin detected! Activate solenoid, then servo, then home both
-            self.get_logger().info("Napkin detected! Activating solenoid and servo...")
-            self.activate_solenoid(True)
-            time.sleep(1)
-            self.activate_servo(True)
-            time.sleep(1)
-            self.activate_servo(False)
-            self.activate_solenoid(False)
-            self.get_logger().info("Task complete! Waiting before restart...")
-            time.sleep(2)
+        # Step 8: Wait for napkin removed (after vacuum is off and X is left)
+        self.get_logger().info("Waiting for napkin sensor to be OFF...")
+        self.wait_for_sensor_state("NAPKIN_SENSOR", desired_state="OFF", timeout=10.0)
+
+        # Step 9: Servo sequence
+        self.get_logger().info("Running servo sequence...")
+        self.arduino_tx_pub.publish(String(data=f"SERVO1:{self.servo1_angle}"))
+        time.sleep(0.4)
+        self.arduino_tx_pub.publish(String(data=f"SERVO2:{self.servo2_angle}"))
+        time.sleep(1.0)
+        self.arduino_tx_pub.publish(String(data="SERVO1:0"))
+        time.sleep(0.4)
+        self.arduino_tx_pub.publish(String(data="SERVO2:0"))
+        time.sleep(0.4)
+
+        self.get_logger().info("Cycle complete! (not repeating automatically)")
 
 def main(args=None):
     rclpy.init(args=args)
     node = MainController()
-    rclpy.spin(node)
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        print("Shutting down main controller.")
+    node.destroy_node()
+    rclpy.shutdown()
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
