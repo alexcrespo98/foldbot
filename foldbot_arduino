@@ -1,0 +1,147 @@
+#include <Servo.h>
+
+// ----------------- Pin Assignments -----------------
+#define X_DIR_PIN 5
+#define X_STEP_PIN 2
+#define Z_DIR_PIN 6
+#define Z_STEP_PIN 3
+#define ENABLE_PIN 8
+
+#define LEFT_LIMIT_PIN 4
+#define RIGHT_LIMIT_PIN 11    // <-- Use your actual pin!
+#define NAPKIN_SENSOR_PIN 7
+
+#define SERVO1_PIN 9
+#define SERVO2_PIN 10
+#define VACUUM_RELAY_PIN 12
+
+// ---- Stepper settings ----
+const int stepsPerRevolution = 200; // adjust if microstepping
+
+Servo servo1;
+Servo servo2;
+
+// ------------- Handshake Variables ------------------
+bool arduinoReadyConfirmed = false;
+unsigned long lastReadyTime = 0;
+
+// ------------------- Setup -------------------------
+void setup() {
+  Serial.begin(9600);
+  pinMode(X_STEP_PIN, OUTPUT);
+  pinMode(X_DIR_PIN, OUTPUT);
+  pinMode(Z_STEP_PIN, OUTPUT);
+  pinMode(Z_DIR_PIN, OUTPUT);
+  pinMode(ENABLE_PIN, OUTPUT);
+  digitalWrite(ENABLE_PIN, LOW);
+
+  pinMode(LEFT_LIMIT_PIN, INPUT_PULLUP);
+  pinMode(RIGHT_LIMIT_PIN, INPUT_PULLUP);
+  pinMode(NAPKIN_SENSOR_PIN, INPUT_PULLUP);
+  pinMode(VACUUM_RELAY_PIN, OUTPUT);
+  digitalWrite(VACUUM_RELAY_PIN, LOW);
+
+  servo1.attach(SERVO1_PIN);
+  servo2.attach(SERVO2_PIN);
+  servo1.write(0);
+  servo2.write(0);
+}
+
+// -------------- Stepper Helper ---------------------
+void stepperMove(int dirPin, int stepPin, bool dir, unsigned long steps) {
+  digitalWrite(dirPin, dir ? HIGH : LOW);
+
+  // Default to Z axis settings: slower, more torque
+  int highDelay = 1200; // microseconds
+  int lowDelay = 1200;
+
+  // --- DRV8825 Recommended for X axis (1 rev/sec, 200 steps/rev, no microstepping) ---
+  // 1 revolution / second = 200 steps/second = 5000us per step (2.5ms high, 2.5ms low)
+  if (dirPin == X_DIR_PIN) {
+    highDelay = 2500;    // Pulse HIGH time (us)
+    lowDelay  = 2500;    // Pulse LOW time (us)
+    // If using microstepping, adjust steps and keep total (highDelay+lowDelay)*steps = 1sec for one rev
+  }
+
+  for (unsigned long i = 0; i < steps; i++) {
+    digitalWrite(stepPin, HIGH);
+    delayMicroseconds(highDelay);
+    digitalWrite(stepPin, LOW);
+    delayMicroseconds(lowDelay);
+  }
+}
+
+// -------------- Command Processor ------------------
+void processCommand(String cmd) {
+  cmd.trim();
+  // Sensor queries
+  if (cmd == "LEFT_LIMIT_SWITCH:QUERY") {
+    Serial.println(String("LEFT_LIMIT_SWITCH:") + (digitalRead(LEFT_LIMIT_PIN) == LOW ? "ON" : "OFF"));
+  } else if (cmd == "RIGHT_LIMIT_SWITCH:QUERY") {
+    Serial.println(String("RIGHT_LIMIT_SWITCH:") + (digitalRead(RIGHT_LIMIT_PIN) == LOW ? "ON" : "OFF"));
+  } else if (cmd == "NAPKIN_SENSOR:QUERY") {
+    Serial.println(String("NAPKIN_SENSOR:") + (digitalRead(NAPKIN_SENSOR_PIN) == LOW ? "ON" : "OFF"));
+  }
+  // Actions
+  else if (cmd.startsWith("X_MOVE:")) {
+    int dir = cmd.substring(7,8).toInt();
+    int steps = cmd.substring(9).toInt();
+    stepperMove(X_DIR_PIN, X_STEP_PIN, dir, steps);
+    Serial.println("X_MOVE:DONE");
+  } 
+  else if (cmd.startsWith("Z_MOVE:")) {
+    // SWAP: invert direction logic for Z
+    int dir = cmd.substring(7,8).toInt();
+    dir = !dir; // <--- invert
+    int steps = cmd.substring(9).toInt();
+    stepperMove(Z_DIR_PIN, Z_STEP_PIN, dir, steps);
+    Serial.println("Z_MOVE:DONE");
+  } 
+  else if (cmd == "VACUUM:ON") {
+    digitalWrite(VACUUM_RELAY_PIN, HIGH);
+    Serial.println("VACUUM:ON");
+  } else if (cmd == "VACUUM:OFF") {
+    digitalWrite(VACUUM_RELAY_PIN, LOW);
+    Serial.println("VACUUM:OFF");
+  } else if (cmd.startsWith("SERVO1:")) {
+    int angle = cmd.substring(7).toInt();
+   
+    servo1.write(angle);
+    Serial.print("SERVO1:"); Serial.println(angle);
+    delay(3000); // 3 second pause
+  } else if (cmd.startsWith("SERVO2:")) {
+    int angle = cmd.substring(7).toInt();
+    servo2.write(angle);
+    Serial.print("SERVO2:"); Serial.println(angle);
+    delay(3000); // 3 second pause
+  } else {
+    Serial.print("UNKNOWN_COMMAND:");
+    Serial.println(cmd);
+  }
+}
+
+// -------------------- Loop -------------------------
+void loop() {
+  // --- Handshake: send "ARDUINO_READY" every 500ms until we get "HELLO_ARDUINO"
+  if (!arduinoReadyConfirmed) {
+    if (millis() - lastReadyTime > 500) {
+      Serial.println("ARDUINO_READY");
+      lastReadyTime = millis();
+    }
+    if (Serial.available()) {
+      String cmd = Serial.readStringUntil('\n');
+      cmd.trim();
+      if (cmd == "HELLO_ARDUINO") {
+        arduinoReadyConfirmed = true;
+        Serial.println("ARDUINO_ACK");
+      }
+    }
+    return; // Don't process further commands until handshake is done
+  }
+
+  // --- Normal operation
+  if (Serial.available()) {
+    String cmd = Serial.readStringUntil('\n');
+    processCommand(cmd);
+  }
+}
